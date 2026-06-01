@@ -75,6 +75,33 @@ Optionally, you can display your currently loaded credentials in your prompt:
     end
 ```
 
+**Starship** — add the following to your `~/.config/starship.toml`:
+
+```toml
+[custom.oscreds]
+command = 'echo $OS_CRED'
+when = 'test -n "$OS_CRED"'
+symbol = '☁️ '
+style = 'bg:color_bg3'
+format = '[[ $symbol( $output) ](fg:#83a598 bg:color_bg3)]($style)'
+
+[openstack]
+disabled = true
+```
+
+The `[openstack]` section disables the built-in OpenStack module (which uses
+`OS_CLOUD`/`clouds.yaml` and won't detect `OS_CRED`).
+
+Then insert `${custom.oscreds}` into your `format` string. For the Gruvbox
+Rainbow preset, place it between `$pixi` and the `color_bg3` → `color_bg1`
+powerline transition:
+
+```diff
+ $pixi\
++${custom.oscreds}\
+ [](fg:color_bg3 bg:color_bg1)\
+```
+
 
 Using token auth
 ----------------
