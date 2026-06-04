@@ -6,8 +6,6 @@ function chcreds
     end
     echo "Credentials loaded for $__OSCREDS_LAST"
 end
-    echo "Credentials loaded for $OS_CRED"
-end
 
 function recred
     if set -q __OSCREDS_LOADED
