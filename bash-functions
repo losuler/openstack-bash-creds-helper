@@ -7,32 +7,69 @@ function chcreds() {
         echo "Failed to load credentials" >&2
         return 1
     fi
-    rmcreds
     source <(printf '%s\n' "$creds")
-    echo "Credentials loaded for $OS_CRED"
+    echo "Credentials loaded for $__OSCREDS_LAST"
 }
 
 function recred() {
-    chcreds "$OS_CRED"
+    if [ -n "$__OSCREDS_LOADED" ]; then
+        local IFS=','
+        for entry in $__OSCREDS_LOADED; do
+            local type="${entry%%|*}"
+            local rest="${entry#*|}"
+            local display="${rest#*|}"
+            chcreds "$type:$display"
+        done
+    elif [ -n "$OS_CRED" ]; then
+        chcreds "$OS_CRED"
+    else
+        echo "No credentials loaded" >&2
+        return 1
+    fi
 }
 
 function rmcreds() {
-    local v
-    for v in ${!OS_@}; do
-        unset "$v"
-    done
+    if [ -n "$__OSCREDS_LOADED" ]; then
+        local removal
+        removal=$(oscreds --remove 2>/dev/null)
+        if [ -n "$removal" ]; then
+            source <(printf '%s\n' "$removal")
+        fi
+    else
+        local v
+        for v in ${!OS_@}; do
+            unset "$v"
+        done
+    fi
 }
 
 function prcreds() {
-    local varname
-    for varname in ${!OS_@}; do
-        if [[ "$varname" == *PASSWORD* || "$varname" == *TOKEN* || "$varname" == *SECRET* ]]; then
-            printf '%s=******\n' "$varname"
-        else
-            # ${!varname} dynamically looks up the value of the variable
-            printf '%s=%s\n' "$varname" "${!varname}"
-        fi
-    done
+    if [ -n "$__OSCREDS_LOADED" ]; then
+        local IFS=','
+        for entry in $__OSCREDS_LOADED; do
+            local prefix="${entry#*|}"
+            prefix="${prefix%%|*}"
+            local varname
+            for varname in $(compgen -v); do
+                if [[ "$varname" == "${prefix}_"* ]]; then
+                    if [[ "$varname" == *PASSWORD* || "$varname" == *TOKEN* || "$varname" == *SECRET* ]]; then
+                        printf '%s=******\n' "$varname"
+                    else
+                        printf '%s=%s\n' "$varname" "${!varname}"
+                    fi
+                fi
+            done
+        done
+    else
+        local varname
+        for varname in ${!OS_@}; do
+            if [[ "$varname" == *PASSWORD* || "$varname" == *TOKEN* || "$varname" == *SECRET* ]]; then
+                printf '%s=******\n' "$varname"
+            else
+                printf '%s=%s\n' "$varname" "${!varname}"
+            fi
+        done
+    fi
 }
 
 function os_creds() {

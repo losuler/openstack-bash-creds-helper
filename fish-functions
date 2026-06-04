@@ -1,31 +1,70 @@
 function chcreds
-    rmcreds
     oscreds --shell fish $argv | source
     if test $pipestatus[1] -ne 0
         echo "Failed to load credentials" >&2
         return 1
     end
+    echo "Credentials loaded for $__OSCREDS_LAST"
+end
     echo "Credentials loaded for $OS_CRED"
 end
 
 function recred
-    chcreds $OS_CRED
+    if set -q __OSCREDS_LOADED
+        set -l entries (string split ',' $__OSCREDS_LOADED)
+        for entry in $entries
+            set -l parts (string split '|' $entry)
+            set -l type $parts[1]
+            set -l display $parts[3]
+            chcreds "$type:$display"
+        end
+    else if set -q OS_CRED
+        chcreds $OS_CRED
+    else
+        echo "No credentials loaded" >&2
+        return 1
+    end
 end
 
 function rmcreds
-    set -l os_vars (set --names | string match 'OS_*')
-    for v in $os_vars
-        set -eg $v
+    if set -q __OSCREDS_LOADED
+        set -l removal (oscreds --shell fish --remove 2>/dev/null)
+        if test $status -eq 0 -a -n "$removal"
+            printf '%s\n' $removal | source
+        end
+    else
+        set -l os_vars (set --names | string match 'OS_*')
+        for v in $os_vars
+            set -eg $v
+        end
     end
 end
 
 function prcreds
-    set -l os_vars (set --names | string match 'OS_*')
-    for v in $os_vars
-        if string match -q '*PASSWORD*' $v; or string match -q '*TOKEN*' $v; or string match -q '*SECRET*' $v
-            printf '%s=******\n' $v
-        else
-            printf '%s=%s\n' $v $$v
+    if set -q __OSCREDS_LOADED
+        set -l entries (string split ',' $__OSCREDS_LOADED)
+        for entry in $entries
+            set -l parts (string split '|' $entry)
+            set -l prefix $parts[2]
+            set -l all_vars (set --names)
+            for v in $all_vars
+                if string match -q "{$prefix}_*" $v
+                    if string match -q '*PASSWORD*' $v; or string match -q '*TOKEN*' $v; or string match -q '*SECRET*' $v
+                        printf '%s=******\n' $v
+                    else
+                        printf '%s=%s\n' $v $$v
+                    end
+                end
+            end
+        end
+    else
+        set -l os_vars (set --names | string match 'OS_*')
+        for v in $os_vars
+            if string match -q '*PASSWORD*' $v; or string match -q '*TOKEN*' $v; or string match -q '*SECRET*' $v
+                printf '%s=******\n' $v
+            else
+                printf '%s=%s\n' $v $$v
+            end
         end
     end
 end

@@ -115,7 +115,8 @@ func SelectCredentialFile(credFiles []CredentialFile) CredentialFile {
 	}
 
 	selected, ok := fzfSelect("Select credential file:", credFiles, func(item CredentialFile) string {
-		return applyKeywordColouring(item.DisplayName)
+		display := item.Type + ": " + applyKeywordColouring(item.DisplayName)
+		return display
 	})
 	if !ok {
 		return CredentialFile{}

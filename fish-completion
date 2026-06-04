@@ -5,14 +5,39 @@ function __oscreds_cred_files
     end
     set -l prefix (string replace -r '/$' '' $prefix)/
 
+    # Default .openrc files
     find $prefix -name '*.openrc.gpg' 2>/dev/null \
         | string replace -r "^$prefix" '' \
         | string replace -r '\.openrc\.gpg$' '' \
         | string match -v '.*' \
         | string match -v '*/.*'
+
+    # Extra extensions from config
+    set -l config_file "${XDG_CONFIG_HOME:-$HOME/.config}/oscreds/config.json"
+    if test -f "$config_file"
+        set -l extensions (python3 -c "
+import json
+try:
+    c=json.load(open('$config_file'))
+    for e in c.get('extra_creds',[]):
+        print(e.get('extension',''))
+except: pass
+" 2>/dev/null)
+        for ext in $extensions
+            if test -n "$ext"
+                set -l suffix "$ext.gpg"
+                find $prefix -name "*$suffix" 2>/dev/null \
+                    | string replace -r "^$prefix" '' \
+                    | string replace -r "\\.[^.]+\\.gpg\$" '' \
+                    | string match -v '.*' \
+                    | string match -v '*/.*'
+            end
+        end
+    end
 end
 
 complete -c chcreds -f -a '(__oscreds_cred_files)'
 complete -c chcreds -s d -l debug -d 'Enable debug output'
 complete -c chcreds -l shell -x -a 'bash fish' -d 'Shell type for output format'
 complete -c chcreds -l project -x -d 'Project name to scope to'
+complete -c chcreds -l remove -d 'Remove loaded credentials'

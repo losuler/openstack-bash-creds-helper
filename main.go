@@ -23,6 +23,7 @@ func main() {
 	debug := flag.Bool("debug", false, "Enable debug output")
 	flag.StringVar(&shellType, "shell", "bash", "Shell type for output format (bash or fish)")
 	flag.StringVar(&projectName, "project", "", "Project name to scope to (skips interactive selection)")
+	remove := flag.Bool("remove", false, "Remove loaded credentials (shows fzf selector if multiple)")
 	flag.Parse()
 
 	if shellType != "bash" && shellType != "fish" {
@@ -33,19 +34,25 @@ func main() {
 	debugMode = *debug
 	DebugMode = *debug
 
-	credFiles, err := GetPassCredFiles()
+	if *remove {
+		handleRemove()
+		return
+	}
+
+	config := loadConfigFile()
+
+	credFiles, err := GetPassCredFiles(config)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error getting credential files: %v\n", err)
 		os.Exit(1)
 	}
 
 	if len(credFiles) == 0 {
-		fmt.Fprintf(os.Stderr, "No .openrc files found in pass\n")
+		fmt.Fprintf(os.Stderr, "No credential files found in pass\n")
 		os.Exit(1)
 	}
 
 	var credFile CredentialFile
-	// Check if a credential path was provided as a positional argument
 	if flag.NArg() > 0 {
 		credPath := flag.Arg(0)
 		credFile = FindCredentialFile(credFiles, credPath)
@@ -54,7 +61,6 @@ func main() {
 			os.Exit(1)
 		}
 	} else {
-		// Let user select from available files
 		credFile = SelectCredentialFile(credFiles)
 		if credFile.Path == "" {
 			fmt.Fprintf(os.Stderr, "No credential file selected\n")
@@ -62,8 +68,22 @@ func main() {
 		}
 	}
 
-	// Load credentials from openrc files
-	debugf("Loading credentials from %s (type: %s)\n", credFile.Path, credFile.Type)
+	debugf("Loading credentials from %s (type: %s, prefix: %s)\n", credFile.Path, credFile.Type, credFile.CredPrefix)
+
+	if credFile.Type != "openrc" {
+		outputUnsetForPrefix(credFile.CredPrefix)
+		rawExports, err := LoadRawCredentials(credFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading credentials from %s: %v\n", credFile.Path, err)
+			os.Exit(1)
+		}
+		debugf("Loaded raw credentials (%d bytes)\n", len(rawExports))
+		fmt.Println(rawExports)
+		outputVar("__OSCREDS_LOADED", buildLoadedEntries(credFile.Type, credFile.CredPrefix, credFile.DisplayName))
+		outputVar("__OSCREDS_LAST", credFile.Type+": "+credFile.DisplayName)
+		return
+	}
+
 	creds, err := LoadCredentials(credFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading credentials from %s: %v\n", credFile.Path, err)
@@ -84,7 +104,6 @@ func main() {
 		debugf("SystemScope defined: %s\n", creds.SystemScope)
 	}
 
-	// Check if TOTP is required and prompt if needed (not applicable for application credentials)
 	if !creds.IsApplicationCredential() && creds.TOTPRequired {
 		debugf("TOTP required, prompting user\n")
 		totpCode, err := PromptForTOTP()
@@ -100,7 +119,6 @@ func main() {
 		debugf("TOTP not required\n")
 	}
 
-	// If using application credentials, get pre-scoped token directly
 	if creds.IsApplicationCredential() {
 		debugf("Application credentials detected - getting pre-scoped token\n")
 
@@ -119,7 +137,6 @@ func main() {
 		return
 	}
 
-	// If system scope is set, get unscoped token only
 	if creds.SystemScope != "" {
 		debugf("System scope defined - getting unscoped token only\n")
 
@@ -232,6 +249,77 @@ func main() {
 	outputEnvironmentVars(credFile, selectedProject, scopedToken, creds)
 }
 
+func handleRemove() {
+	loaded := os.Getenv("__OSCREDS_LOADED")
+	entries := parseLoadedEntries(loaded)
+
+	if len(entries) == 0 {
+		os_isset := false
+		for _, envVar := range os.Environ() {
+			if strings.HasPrefix(envVar, "OS_") {
+				os_isset = true
+				break
+			}
+		}
+		if os_isset {
+			outputUnsetForPrefix("OS")
+			outputUnsetVar("__OSCREDS_LOADED")
+			outputUnsetVar("__OSCREDS_LAST")
+		}
+		return
+	}
+
+	if len(entries) == 1 {
+		outputRemoveEntry(entries[0], entries)
+		return
+	}
+
+	selected, ok := fzfSelect("Remove credentials:", entries, func(item LoadedEntry) string {
+		return item.Type + ": " + item.Display
+	})
+	if !ok {
+		return
+	}
+
+	outputRemoveEntry(selected, entries)
+}
+
+func outputRemoveEntry(entry LoadedEntry, allEntries []LoadedEntry) {
+	outputUnsetForPrefix(entry.Prefix)
+	outputUnsetVar("__OSCREDS_LAST")
+
+	var remaining []string
+	for _, e := range allEntries {
+		if e.Type != entry.Type {
+			remaining = append(remaining, e.Type+"|"+e.Prefix+"|"+e.Display)
+		}
+	}
+
+	if len(remaining) == 0 {
+		outputUnsetVar("__OSCREDS_LOADED")
+	} else {
+		outputVar("__OSCREDS_LOADED", strings.Join(remaining, ","))
+	}
+}
+
+func outputUnsetForPrefix(prefix string) {
+	for _, envVar := range os.Environ() {
+		parts := strings.SplitN(envVar, "=", 2)
+		name := parts[0]
+		if strings.HasPrefix(name, prefix+"_") {
+			outputUnsetVar(name)
+		}
+	}
+}
+
+func outputUnsetVar(name string) {
+	if shellType == "fish" {
+		fmt.Printf("set -eg %s\n", name)
+	} else {
+		fmt.Printf("unset %s\n", name)
+	}
+}
+
 func fishEscape(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `'`, `\'`)
@@ -242,11 +330,13 @@ func outputVar(name string, value string) {
 	if shellType == "fish" {
 		fmt.Printf("set -gx %s %s\n", name, fishEscape(value))
 	} else {
-		fmt.Printf("export %s=%s\n", name, value)
+		escaped := strings.ReplaceAll(value, "'", "'\\''")
+		fmt.Printf("export %s='%s'\n", name, escaped)
 	}
 }
 
 func outputEnvironmentVars(credFile CredentialFile, project *Project, token string, creds *Credentials) {
+	outputUnsetForPrefix("OS")
 	outputVar("OS_CRED", credFile.DisplayName)
 	outputVar("OS_IDENTITY_API_VERSION", "3")
 	outputVar("OS_AUTH_URL", creds.AuthURL)
@@ -256,9 +346,12 @@ func outputEnvironmentVars(credFile CredentialFile, project *Project, token stri
 	if creds.Region != "" {
 		outputVar("OS_REGION_NAME", creds.Region)
 	}
+	outputVar("__OSCREDS_LOADED", buildLoadedEntries("openrc", "OS", credFile.DisplayName))
+	outputVar("__OSCREDS_LAST", "openrc: "+credFile.DisplayName)
 }
 
 func outputSystemScopeVars(credFile CredentialFile, token string, creds *Credentials) {
+	outputUnsetForPrefix("OS")
 	outputVar("OS_CRED", credFile.DisplayName+"/system")
 	outputVar("OS_IDENTITY_API_VERSION", "3")
 	outputVar("OS_AUTH_URL", creds.AuthURL)
@@ -268,4 +361,6 @@ func outputSystemScopeVars(credFile CredentialFile, token string, creds *Credent
 	if creds.Region != "" {
 		outputVar("OS_REGION_NAME", creds.Region)
 	}
+	outputVar("__OSCREDS_LOADED", buildLoadedEntries("openrc", "OS", credFile.DisplayName+"/system"))
+	outputVar("__OSCREDS_LAST", "openrc: "+credFile.DisplayName+"/system")
 }

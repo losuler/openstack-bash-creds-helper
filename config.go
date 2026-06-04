@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,10 +10,22 @@ import (
 	"strings"
 )
 
+type ExtraCredConfig struct {
+	Name      string `json:"name"`
+	Extension string `json:"extension"`
+	Prefix    string `json:"prefix"`
+}
+
+type Config struct {
+	ExtraCreds []ExtraCredConfig `json:"extra_creds"`
+}
+
 type CredentialFile struct {
 	Path        string
-	Type        string // "openrc"
+	Type        string
 	DisplayName string
+	CredPrefix  string
+	Extension   string
 }
 
 type Credentials struct {
@@ -31,6 +44,34 @@ type Credentials struct {
 	ApplicationCredentialSecret string
 }
 
+func getConfigDir() string {
+	configDir := os.Getenv("XDG_CONFIG_HOME")
+	if configDir == "" {
+		homeDir, _ := os.UserHomeDir()
+		configDir = filepath.Join(homeDir, ".config")
+	}
+	return filepath.Join(configDir, "oscreds")
+}
+
+func loadConfigFile() *Config {
+	configPath := filepath.Join(getConfigDir(), "config.json")
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		debugf("No config file found: %v\n", err)
+		return &Config{}
+	}
+
+	var config Config
+	if err := json.Unmarshal(data, &config); err != nil {
+		debugf("Failed to parse config file: %v\n", err)
+		return &Config{}
+	}
+
+	debugf("Loaded config with %d extra credential types\n", len(config.ExtraCreds))
+	return &config
+}
+
 func getPassDir() string {
 	passDir := os.Getenv("PASSWORD_STORE_DIR")
 	if passDir == "" {
@@ -40,17 +81,15 @@ func getPassDir() string {
 	return passDir
 }
 
-func GetPassCredFiles() ([]CredentialFile, error) {
-	passDir := getPassDir()
-
-	var credFiles []CredentialFile
+func scanPassDir(passDir, extension, credType, credPrefix string, credFiles *[]CredentialFile) error {
+	suffix := extension + ".gpg"
 
 	err := filepath.Walk(passDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}
 
-		if !info.IsDir() && strings.HasSuffix(info.Name(), ".openrc.gpg") {
+		if !info.IsDir() && strings.HasSuffix(info.Name(), suffix) {
 			relPath, err := filepath.Rel(passDir, path)
 			if err != nil {
 				return nil
@@ -59,46 +98,88 @@ func GetPassCredFiles() ([]CredentialFile, error) {
 			passPath := strings.TrimSuffix(relPath, ".gpg")
 			passPath = filepath.ToSlash(passPath)
 
-			// Create display name without the extension
-			displayName := strings.TrimSuffix(passPath, ".openrc")
+			displayName := strings.TrimSuffix(passPath, extension)
 
-			credFiles = append(credFiles, CredentialFile{
+			*credFiles = append(*credFiles, CredentialFile{
 				Path:        passPath,
-				Type:        "openrc",
+				Type:        credType,
 				DisplayName: displayName,
+				CredPrefix:  credPrefix,
+				Extension:   extension,
 			})
 		}
 
 		return nil
 	})
 
+	return err
+}
+
+func GetPassCredFiles(config *Config) ([]CredentialFile, error) {
+	passDir := getPassDir()
+
+	var credFiles []CredentialFile
+
+	err := scanPassDir(passDir, ".openrc", "openrc", "OS", &credFiles)
 	if err != nil {
 		return nil, err
 	}
 
+	for _, extra := range config.ExtraCreds {
+		ext := extra.Extension
+		if !strings.HasPrefix(ext, ".") {
+			ext = "." + ext
+		}
+		err := scanPassDir(passDir, ext, extra.Name, extra.Prefix, &credFiles)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	sort.Slice(credFiles, func(i, j int) bool {
+		if credFiles[i].Type != credFiles[j].Type {
+			return credFiles[i].Type < credFiles[j].Type
+		}
 		return credFiles[i].DisplayName < credFiles[j].DisplayName
 	})
 	return credFiles, nil
 }
 
-// FindCredentialFile searches for a credential file by path or display name
 func FindCredentialFile(credFiles []CredentialFile, pathOrName string) CredentialFile {
-	// Normalize the input by removing .openrc extension if present
-	searchPath := strings.TrimSuffix(pathOrName, ".openrc")
+	if idx := strings.Index(pathOrName, ":"); idx > 0 {
+		typeName := pathOrName[:idx]
+		displayName := pathOrName[idx+1:]
+		for _, cf := range credFiles {
+			if cf.Type == typeName && cf.DisplayName == displayName {
+				return cf
+			}
+		}
+	}
+
+	searchPath := pathOrName
+	for _, ext := range allExtensions() {
+		searchPath = strings.TrimSuffix(searchPath, ext)
+	}
 
 	for _, cf := range credFiles {
-		// Match against DisplayName (without .openrc)
 		if cf.DisplayName == searchPath {
 			return cf
 		}
-		// Match against Path (with .openrc)
-		if cf.Path == pathOrName || cf.Path == searchPath+".openrc" {
+		if cf.Path == pathOrName || cf.Path == searchPath+cf.Extension {
 			return cf
 		}
 	}
 
 	return CredentialFile{}
+}
+
+func allExtensions() []string {
+	config := loadConfigFile()
+	extensions := []string{".openrc"}
+	for _, extra := range config.ExtraCreds {
+		extensions = append(extensions, extra.Extension)
+	}
+	return extensions
 }
 
 func LoadCredentials(credFile CredentialFile) (*Credentials, error) {
@@ -202,4 +283,67 @@ func (c *Credentials) HasProjectDefined() bool {
 // IsApplicationCredential returns true if the credentials use application credential authentication
 func (c *Credentials) IsApplicationCredential() bool {
 	return c.ApplicationCredentialID != "" && c.ApplicationCredentialSecret != ""
+}
+
+func LoadRawCredentials(credFile CredentialFile) (string, error) {
+	decryptedText, err := passShow(credFile.Path)
+	if err != nil {
+		return "", err
+	}
+
+	var exports []string
+	lines := strings.Split(decryptedText, "\n")
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "export ") {
+			exports = append(exports, line)
+		}
+	}
+
+	return strings.Join(exports, "\n"), nil
+}
+
+type LoadedEntry struct {
+	Type    string
+	Prefix  string
+	Display string
+}
+
+func parseLoadedEntries(loaded string) []LoadedEntry {
+	if loaded == "" {
+		return nil
+	}
+
+	var entries []LoadedEntry
+	for _, entry := range strings.Split(loaded, ",") {
+		parts := strings.SplitN(entry, "|", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		entries = append(entries, LoadedEntry{
+			Type:    parts[0],
+			Prefix:  parts[1],
+			Display: parts[2],
+		})
+	}
+	return entries
+}
+
+func buildLoadedEntries(newType, newPrefix, newDisplay string) string {
+	currentLoaded := os.Getenv("__OSCREDS_LOADED")
+	newEntry := newType + "|" + newPrefix + "|" + newDisplay
+
+	var entries []string
+	if currentLoaded != "" {
+		for _, entry := range strings.Split(currentLoaded, ",") {
+			parts := strings.SplitN(entry, "|", 2)
+			if len(parts) >= 1 && parts[0] != newType {
+				entries = append(entries, entry)
+			}
+		}
+	}
+
+	entries = append(entries, newEntry)
+	return strings.Join(entries, ",")
 }

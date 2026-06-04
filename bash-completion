@@ -1,49 +1,63 @@
-# completion for chchreds
+# completion for chcreds
 
 _chcreds () {
 	COMPREPLY=()
 	local cur="${COMP_WORDS[COMP_CWORD]}"
 
 	if [[ "$cur" == -* ]]; then
-		local opts="-debug -shell -project"
+		local opts="-debug -shell -project -remove"
 		COMPREPLY=($(compgen -W "$opts" -- "$cur"))
 		return
 	fi
 
 	prefix="${PASSWORD_STORE_DIR:-$HOME/.password-store/}"
 	prefix="${prefix%/}/"
-	suffix=".openrc.gpg"
+
+	# Collect all extensions from config and default .openrc
+	local extensions=".openrc"
+	local config_file="${XDG_CONFIG_HOME:-$HOME/.config}/oscreds/config.json"
+	if [ -f "$config_file" ]; then
+		while IFS= read -r ext; do
+			[ -n "$ext" ] && extensions="$extensions $ext"
+		done < <(python3 -c "
+import json,sys
+try:
+    c=json.load(open('$config_file'))
+    for e in c.get('extra_creds',[]):
+        print(e.get('extension',''))
+except: pass
+" 2>/dev/null)
+	fi
 
 	local IFS=$'\n'
-	local items=($(compgen -f $prefix$cur))
-
-	# Remember the value of the first item, to see if it is a directory. If
-	# it is a directory, then don't add a space to the completion
-	local firstitem=""
+	local items=()
 	local i=0
+	local firstitem=""
 
-	for item in ${items[@]}; do
-        # filter out hidden dirs
-		[[ $item =~ /\.[^/]*$ ]] && continue
+	for ext in $extensions; do
+		local suffix="${ext}.gpg"
+		local found_items=($(compgen -f $prefix$cur))
 
-		# filter out any files that don't match our suffix
-		if [[ -f $item ]]; then
-			[[ $item =~ /.*${suffix}$ ]] || continue
-		fi
+		for item in "${found_items[@]}"; do
+			[[ $item =~ /\.[^/]*$ ]] && continue
 
-		# append / to directories
-		[[ -d $item ]] && item="$item/"
+			if [[ -f $item ]]; then
+				[[ $item =~ /.*${suffix}$ ]] || continue
+			fi
 
-		item="${item%$suffix}"
-		COMPREPLY+=("${item#$prefix}")
-		if [[ $i -eq 0 ]]; then
-			firstitem=$item
-		fi
-		let i+=1
+			[[ -d $item ]] && item="$item/"
+
+			item="${item%$suffix}"
+			items+=("${item#$prefix}")
+			if [[ $i -eq 0 ]]; then
+				firstitem=$item
+			fi
+			let i+=1
+		done
 	done
 
-	# The only time we want to add a space to the end is if there is only
-	# one match, and it is not a directory
+	COMPREPLY=("${items[@]}")
+
 	if [[ $i -gt 1 || ( $i -eq 1 && -d $firstitem ) ]]; then
 		compopt -o nospace
 	fi
