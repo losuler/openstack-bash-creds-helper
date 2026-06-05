@@ -223,20 +223,23 @@ Once you have the `oscreds` binary, put it somewhere in your path
 
 ### Bash
 
-Grab a copy of the `bash-functions` file from this repo
-and drop it into your `.bashrc.d` (or similar) or source it from your `.bashrc`
-to load automatically in your shell.
+``` sh
+    mkdir -p ~/.bashrc.d
+    cp bash-functions ~/.bashrc.d/
+```
+
+Then add the following to your `~/.bashrc`:
+
+``` sh
+    source ~/.bashrc.d/bash-functions
+```
 
 ### Fish
 
-Source the `fish-functions` file from your `~/.config/fish/config.fish`:
-
 ``` sh
-    source /path/to/fish-functions
+    mkdir -p ~/.config/fish/conf.d
+    cp fish-functions ~/.config/fish/conf.d/oscreds.fish
 ```
-
-Or copy the individual functions into `~/.config/fish/functions/` as
-autoloaded `.fish` files (e.g. `~/.config/fish/functions/chcreds.fish`).
 
 Adding OpenStack credentials
 -----------------------------
@@ -299,8 +302,6 @@ Completion scripts for both bash and fish are included.
 
 ### Bash
 
-To install it for your user, the following should work:
-
 ``` sh
     mkdir -p ~/.local/share/bash-completion/completions
     cp bash-completion ~/.local/share/bash-completion/completions/chcreds
@@ -308,14 +309,10 @@ To install it for your user, the following should work:
 
 ### Fish
 
-To install it for your user, copy the completion file to your fish completions directory:
-
 ``` sh
     mkdir -p ~/.config/fish/completions
     cp fish-completion ~/.config/fish/completions/chcreds.fish
 ```
-
-You can then use tab completion to complete the filename of the credentials file.
 
 Building
 --------
