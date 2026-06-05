@@ -225,13 +225,13 @@ Once you have the `oscreds` binary, put it somewhere in your path
 
 ``` sh
     mkdir -p ~/.bashrc.d
-    cp bash-functions ~/.bashrc.d/
+    cp bash-functions ~/.bashrc.d/oscreds.bash
 ```
 
 Then add the following to your `~/.bashrc`:
 
 ``` sh
-    source ~/.bashrc.d/bash-functions
+    source ~/.bashrc.d/oscreds.bash
 ```
 
 ### Fish
@@ -304,14 +304,14 @@ Completion scripts for both bash and fish are included.
 
 ``` sh
     mkdir -p ~/.local/share/bash-completion/completions
-    cp bash-completion ~/.local/share/bash-completion/completions/chcreds
+    cp bash-completion ~/.local/share/bash-completion/completions/oscreds
 ```
 
 ### Fish
 
 ``` sh
     mkdir -p ~/.config/fish/completions
-    cp fish-completion ~/.config/fish/completions/chcreds.fish
+    cp fish-completion ~/.config/fish/completions/oscreds.fish
 ```
 
 Building
