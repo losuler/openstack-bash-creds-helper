@@ -13,7 +13,11 @@ function __oscreds_cred_files
         | string match -v '*/.*'
 
     # Extra extensions from config
-    set -l config_file "${XDG_CONFIG_HOME:-$HOME/.config}/oscreds/config.json"
+    set -l xdg_config $XDG_CONFIG_HOME
+    if test -z "$xdg_config"
+        set xdg_config $HOME/.config
+    end
+    set -l config_file "$xdg_config/oscreds/config.json"
     if test -f "$config_file"
         set -l extensions (python3 -c "
 import json
