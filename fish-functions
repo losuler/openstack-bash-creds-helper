@@ -46,7 +46,7 @@ function prcreds
             set -l prefix $parts[2]
             set -l all_vars (set --names)
             for v in $all_vars
-                if string match -q "{$prefix}_*" $v
+                if string match -q "$prefix""_*" $v
                     if string match -q '*PASSWORD*' $v; or string match -q '*TOKEN*' $v; or string match -q '*SECRET*' $v
                         printf '%s=******\n' $v
                     else
